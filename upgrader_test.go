@@ -9,15 +9,15 @@ import (
 
 // TestNewUpgrader 测试 NewUpgrader 构造函数
 func TestNewUpgrader(t *testing.T) {
-	server := NewServer(nil)
-	upgrader := NewUpgrader(server)
+	hub := NewHub(nil)
+	upgrader := NewUpgrader(hub)
 
 	if upgrader == nil {
 		t.Fatal("NewUpgrader returned nil")
 	}
 
-	if upgrader.server != server {
-		t.Error("Upgrader server not set correctly")
+	if upgrader.hub != hub {
+		t.Error("Upgrader hub not set correctly")
 	}
 }
 
@@ -80,10 +80,10 @@ func TestIsAllowedOrigin(t *testing.T) {
 
 // TestUpgrader_Accept_InvalidOrigin 测试无效 Origin 被拒绝
 func TestUpgrader_Accept_InvalidOrigin(t *testing.T) {
-	server := NewServer(&ServerConfig{
+	hub := NewHub(&ServerConfig{
 		AllowedOrigins: []string{"http://example.com"},
 	})
-	upgrader := NewUpgrader(server)
+	upgrader := NewUpgrader(hub)
 
 	// 创建测试请求
 	req := httptest.NewRequest("GET", "http://localhost:8080/ws", nil)
@@ -111,10 +111,10 @@ func TestUpgrader_Accept_InvalidOrigin(t *testing.T) {
 
 // TestUpgrader_Accept_ValidOrigin 测试有效 Origin 被接受
 func TestUpgrader_Accept_ValidOrigin(t *testing.T) {
-	server := NewServer(&ServerConfig{
+	hub := NewHub(&ServerConfig{
 		AllowedOrigins: []string{"http://example.com"},
 	})
-	upgrader := NewUpgrader(server)
+	upgrader := NewUpgrader(hub)
 
 	// 创建测试请求 - 注意：这不是一个真实的 WebSocket 升级请求
 	// 所以 Accept 会失败，但不是因为 Origin 验证
@@ -134,10 +134,10 @@ func TestUpgrader_Accept_ValidOrigin(t *testing.T) {
 
 // TestUpgrader_Accept_AllowAll 测试允许所有来源
 func TestUpgrader_Accept_AllowAll(t *testing.T) {
-	server := NewServer(&ServerConfig{
+	hub := NewHub(&ServerConfig{
 		AllowedOrigins: []string{"*"},
 	})
-	upgrader := NewUpgrader(server)
+	upgrader := NewUpgrader(hub)
 
 	// 创建测试请求
 	req := httptest.NewRequest("GET", "http://localhost:8080/ws", nil)
@@ -156,10 +156,10 @@ func TestUpgrader_Accept_AllowAll(t *testing.T) {
 
 // TestUpgrader_Accept_NoOriginHeader 测试没有 Origin 头的请求
 func TestUpgrader_Accept_NoOriginHeader(t *testing.T) {
-	server := NewServer(&ServerConfig{
+	hub := NewHub(&ServerConfig{
 		AllowedOrigins: []string{}, // 空列表拒绝所有
 	})
-	upgrader := NewUpgrader(server)
+	upgrader := NewUpgrader(hub)
 
 	// 创建测试请求（不设置 Origin 头）
 	req := httptest.NewRequest("GET", "http://localhost:8080/ws", nil)
@@ -185,10 +185,10 @@ func TestUpgrader_Accept_NoOriginHeader(t *testing.T) {
 
 // TestUpgrader_Accept_EmptyOriginAllowed 测试空 origin 在某些情况下被允许
 func TestUpgrader_Accept_EmptyOriginAllowed(t *testing.T) {
-	server := NewServer(&ServerConfig{
+	hub := NewHub(&ServerConfig{
 		AllowedOrigins: []string{"*"}, // 星号应该匹配所有，包括空
 	})
-	upgrader := NewUpgrader(server)
+	upgrader := NewUpgrader(hub)
 
 	// 创建测试请求（不设置 Origin 头）
 	req := httptest.NewRequest("GET", "http://localhost:8080/ws", nil)
@@ -206,41 +206,41 @@ func TestUpgrader_Accept_EmptyOriginAllowed(t *testing.T) {
 
 // TestUpgrader_MaxMessageSize 测试消息大小限制被应用
 func TestUpgrader_MaxMessageSize(t *testing.T) {
-	server := NewServer(&ServerConfig{
+	hub := NewHub(&ServerConfig{
 		BaseConfig: BaseConfig{
 			MaxMessageSize: 1024, // 1KB
 		},
 		AllowedOrigins: []string{"*"},
 	})
-	upgrader := NewUpgrader(server)
+	upgrader := NewUpgrader(hub)
 
 	// 验证配置被正确设置
-	if server.config.MaxMessageSize != 1024 {
-		t.Errorf("Expected MaxMessageSize 1024, got %d", server.config.MaxMessageSize)
+	if hub.config.MaxMessageSize != 1024 {
+		t.Errorf("Expected MaxMessageSize 1024, got %d", hub.config.MaxMessageSize)
 	}
 
 	// 注意：实际的消息大小限制在 Accept 时应用
 	// 这里我们只能验证配置被正确设置
-	if upgrader.server.config.MaxMessageSize != 1024 {
+	if upgrader.hub.config.MaxMessageSize != 1024 {
 		t.Error("MaxMessageSize not propagated to upgrader")
 	}
 }
 
 // TestUpgrader_NilServerConfig 测试 nil 配置使用默认值
 func TestUpgrader_NilServerConfig(t *testing.T) {
-	server := NewServer(nil) // 使用默认配置
-	upgrader := NewUpgrader(server)
+	hub := NewHub(nil) // 使用默认配置
+	upgrader := NewUpgrader(hub)
 
-	if upgrader.server.config == nil {
-		t.Fatal("Server config should not be nil")
+	if upgrader.hub.config == nil {
+		t.Fatal("Hub config should not be nil")
 	}
 
 	// 验证默认值
-	if upgrader.server.config.AllowedOrigins == nil {
+	if upgrader.hub.config.AllowedOrigins == nil {
 		t.Error("AllowedOrigins should be initialized with default value")
 	}
 
-	if upgrader.server.config.MaxMessageSize == 0 {
+	if upgrader.hub.config.MaxMessageSize == 0 {
 		t.Error("MaxMessageSize should have default value")
 	}
 }

@@ -4,20 +4,20 @@ import (
 	"fmt"
 
 	"github.com/sohaha/zlsgo/znet"
-	"github.com/sohaha/zws"
+	"github.com/zlsgo/zws"
 )
 
 func main() {
 	// 创建 znet 引擎
 	engine := znet.New()
 
-	// 创建 WebSocket 服务端
-	server := zws.NewServer(&zws.ServerConfig{
+	// 创建 WebSocket Hub
+	hub := zws.NewHub(&zws.ServerConfig{
 		AllowedOrigins: []string{"http://localhost:8080"},
 	})
 
 	// 设置消息处理
-	server.OnMessage(func(conn *zws.Conn, data []byte) {
+	hub.OnMessage(func(conn *zws.Conn, data []byte) {
 		// 回显收到的消息
 		// conn.JSON(map[string]string{
 		// 	"echo": string(data),
@@ -26,12 +26,12 @@ func main() {
 	})
 
 	// 注册 WebSocket 路由
-	zws.WS(engine, "/ws", server, func(wsCtx *zws.WebSocketContext) {
+	zws.WS(engine, "/ws", hub, func(wsCtx *zws.WebSocketContext) {
 		fmt.Println("Client connected:", wsCtx.Conn().ID())
 	})
 
 	// 设置断开消息
-	server.OnDisconnect(func(c *zws.Conn) {
+	hub.OnDisconnect(func(c *zws.Conn) {
 		fmt.Println("Client disconnect:", c.ID())
 	})
 

@@ -15,7 +15,7 @@
 ## 安装
 
 ```bash
-go get github.com/sohaha/zws
+go get github.com/zlsgo/zws
 ```
 
 ## 快速开始
@@ -27,24 +27,24 @@ package main
 
 import (
 	"github.com/sohaha/zlsgo/znet"
-	"github.com/sohaha/zws"
+	"github.com/zlsgo/zws"
 )
 
 func main() {
 	engine := znet.New()
 
-	server := zws.NewServer(&zws.ServerConfig{
+	hub := zws.NewHub(&zws.ServerConfig{
 		AllowedOrigins: []string{"*"},
 	})
 
-	server.OnMessage(func(conn *zws.Conn, data []byte) {
+	hub.OnMessage(func(conn *zws.Conn, data []byte) {
 		_ = conn.JSON(map[string]any{
 			"client_id": conn.ID(),
 			"echo":      string(data),
 		})
 	})
 
-	zws.WS(engine, "/ws", server, func(wsCtx *zws.WebSocketContext) {
+	zws.WS(engine, "/ws", hub, func(wsCtx *zws.WebSocketContext) {
 		wsCtx.Log.Info("client connected:", wsCtx.Conn().ID())
 	})
 
@@ -62,7 +62,7 @@ import (
 	"log"
 
 	"github.com/sohaha/zlsgo/ztype"
-	"github.com/sohaha/zws/client"
+	"github.com/zlsgo/zws/client"
 )
 
 func main() {
@@ -123,15 +123,14 @@ go run ./example/chat/client
 服务端入口。常用方法：
 
 ```go
-server := zws.NewServer(config)
+hub := zws.NewHub(config)
 
-server.OnConnect(func(conn *zws.Conn) {})
-server.OnMessage(func(conn *zws.Conn, data []byte) {})
-server.OnDisconnect(func(conn *zws.Conn) {})
-server.OnError(func(conn *zws.Conn, err error) {})
+hub.OnConnect(func(conn *zws.Conn) {})
+hub.OnMessage(func(conn *zws.Conn, data []byte) {})
+hub.OnDisconnect(func(conn *zws.Conn) {})
+hub.OnError(func(conn *zws.Conn, err error) {})
 
-hub := server.Hub()
-cfg := server.Config()
+cfg := hub.Config()
 ```
 
 ### znet 路由接入
@@ -139,7 +138,7 @@ cfg := server.Config()
 `zws.WS` 会在 `znet.Engine` 上注册一个 `GET` 路由，完成升级、连接注册和读写循环启动。
 
 ```go
-zws.WS(engine, "/ws", server, func(wsCtx *zws.WebSocketContext) {
+zws.WS(engine, "/ws", hub, func(wsCtx *zws.WebSocketContext) {
 	wsCtx.JoinRoom("lobby")
 	_ = wsCtx.JSON(map[string]string{"type": "welcome"})
 })
@@ -198,7 +197,7 @@ wsCtx.GetRoomSize("lobby")
 
 ### client.Client
 
-Go 客户端位于 `github.com/sohaha/zws/client`：
+Go 客户端位于 `github.com/zlsgo/zws/client`：
 
 ```go
 c, err := client.NewClient(url, config)
@@ -295,7 +294,7 @@ func (MyCodec) Decode(r io.Reader, v any) error {
 	return nil
 }
 
-server := zws.NewServer(&zws.ServerConfig{
+hub := zws.NewHub(&zws.ServerConfig{
 	BaseConfig: zws.BaseConfig{
 		Codec: MyCodec{},
 	},

@@ -5,6 +5,8 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
+	"net/http"
+	"nhooyr.io/websocket"
 )
 
 // Hub 管理 WebSocket 连接池
@@ -54,6 +56,73 @@ func (h *Hub) Register(conn *Conn) {
 	if onConnect != nil {
 		onConnect(conn)
 	}
+}
+
+// HandlerFunc 定义 WebSocket 处理函数类型
+type HandlerFunc func(*WebSocketContext)
+
+// serve 处理 WebSocket 连接
+func (h *Hub) serve(wsCtx *WebSocketContext, handlers ...HandlerFunc) {
+	for _, handler := range handlers {
+		handler(wsCtx)
+	}
+
+	conn := wsCtx.Conn()
+	
+	// 启动读写泵
+	go conn.writePump()
+	go conn.readPump(func(conn *Conn, data []byte) {
+		if onMessage := h.messageHandler(); onMessage != nil {
+			onMessage(conn, data)
+		}
+	})
+}
+
+// Handler 返回 znet 处理器
+func (h *Hub) Handler() HandlerFunc {
+	return func(wsCtx *WebSocketContext) {
+		h.serve(wsCtx)
+	}
+}
+
+// Accept 接受 WebSocket 连接（HTTP 升级）
+func (h *Hub) Accept(w http.ResponseWriter, r *http.Request) (*Conn, error) {
+	// 验证 Origin 头
+	origin := r.Header.Get("Origin")
+	if !isAllowedOrigin(origin, h.config.AllowedOrigins) {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return nil, fmt.Errorf("origin not allowed: %s", origin)
+	}
+
+	opts := &websocket.AcceptOptions{
+		OriginPatterns: h.config.AllowedOrigins,
+	}
+
+	ws, err := websocket.Accept(w, r, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	// 应用消息大小限制
+	ws.SetReadLimit(h.config.MaxMessageSize)
+
+	conn := NewConn("", ws, h, h.config.Codec)
+	h.Register(conn)
+
+	return conn, nil
+}
+
+// isAllowedOrigin 检查 origin 是否在允许列表中
+func isAllowedOrigin(origin string, allowed []string) bool {
+	if len(allowed) == 0 {
+		return false // 默认拒绝所有跨域请求
+	}
+	for _, pattern := range allowed {
+		if pattern == "*" || origin == pattern {
+			return true
+		}
+	}
+	return false
 }
 
 // Unregister 注销连接
