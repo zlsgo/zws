@@ -1,4 +1,4 @@
-module github.com/sohaha/zws
+module github.com/zlsgo/zws
 
 go 1.18
 

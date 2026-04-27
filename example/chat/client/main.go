@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/sohaha/zlsgo/ztype"
-	"github.com/sohaha/zws/client"
+	"github.com/zlsgo/zws/client"
 )
 
 func main() {

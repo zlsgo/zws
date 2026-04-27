@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sohaha/zws"
+	"github.com/zlsgo/zws"
 )
 
 // TestNewClient 测试 NewClient 构造函数

@@ -12,16 +12,17 @@ import (
 
 // Conn 包装 WebSocket 连接
 type Conn struct {
-	id     string
-	ws     *websocket.Conn
-	hub    *Hub
-	codec  MessageCodec
-	ctx    context.Context
-	cancel context.CancelFunc
-	send   chan []byte
-	once   sync.Once
-	mu     sync.RWMutex
-	closed atomic.Bool
+	id       string
+	ws       *websocket.Conn
+	hub      *Hub
+	codec    MessageCodec
+	ctx      context.Context
+	cancel   context.CancelFunc
+	send     chan []byte
+	once     sync.Once
+	mu       sync.RWMutex
+	closed   atomic.Bool
+	adapter  *ConnectionAdapter // 读写循环适配器
 	// 用户自定义数据
 	metadata map[string]any
 }
@@ -29,7 +30,7 @@ type Conn struct {
 // NewConn 创建新的连接包装
 func NewConn(id string, ws *websocket.Conn, hub *Hub, codec MessageCodec) *Conn {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Conn{
+	conn := &Conn{
 		id:       id,
 		ws:       ws,
 		hub:      hub,
@@ -39,6 +40,13 @@ func NewConn(id string, ws *websocket.Conn, hub *Hub, codec MessageCodec) *Conn 
 		send:     make(chan []byte, DefaultSendBufferSize),
 		metadata: make(map[string]any),
 	}
+
+	// 初始化适配器
+	if ws != nil {
+		conn.adapter = NewConnectionAdapter(ws, ctx)
+	}
+
+	return conn
 }
 
 // ID 返回连接 ID
@@ -136,6 +144,12 @@ func (c *Conn) reportError(err error) {
 
 // writePump 写入循环
 func (c *Conn) writePump() {
+	if c.adapter == nil {
+		// 兼容 nil ws 连接的情况
+		defer c.Close()
+		return
+	}
+
 	interval := DefaultPingInterval
 	pingWait := DefaultPingWait
 	if c.hub != nil && c.hub.config != nil {
@@ -143,36 +157,21 @@ func (c *Conn) writePump() {
 		pingWait = c.hub.config.PingWait
 	}
 
-	var tickerC <-chan time.Time
-	if interval > 0 {
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		tickerC = ticker.C
-	}
-	defer c.Close()
-
-	for {
-		select {
-		case data := <-c.send:
-			if err := c.write(data); err != nil {
-				c.reportError(err)
-				return
-			}
-		case <-tickerC:
-			// 心跳 ping
-			if c.ws != nil {
-				ctx, cancel := context.WithTimeout(c.ctx, pingWait)
-				err := c.ws.Ping(ctx)
-				cancel()
-				if err != nil {
-					c.reportError(err)
-					return
-				}
-			}
-		case <-c.ctx.Done():
-			return
+	// 配置适配器
+	c.adapter.SetPingConfig(interval, pingWait, func(err error) {
+		if err != nil {
+			c.reportError(err)
 		}
-	}
+	})
+	c.adapter.SetCloseHandler(func() {
+		c.Close()
+	})
+	c.adapter.SetWriteHandler(nil, func(err error) {
+		c.reportError(err)
+	})
+
+	// 启动写入循环
+	c.adapter.WritePumpWithChannel(c.send)
 }
 
 // write 写入数据
@@ -187,21 +186,27 @@ func (c *Conn) write(data []byte) error {
 
 // readPump 读取循环
 func (c *Conn) readPump(handler func(*Conn, []byte)) {
-	defer c.Close()
-
-	if c.ws == nil {
-		c.reportError(fmt.Errorf("websocket connection is nil"))
+	if c.adapter == nil {
+		// 兼容 nil ws 连接的情况
+		defer c.Close()
+		if c.ws == nil {
+			c.reportError(fmt.Errorf("websocket connection is nil"))
+		}
 		return
 	}
 
-	for {
-		_, data, err := c.ws.Read(c.ctx)
-		if err != nil {
-			c.reportError(err)
-			break
-		}
+	// 配置适配器
+	c.adapter.SetReadHandler(func(data []byte) {
 		if handler != nil {
 			handler(c, data)
 		}
-	}
+	}, func(err error) {
+		c.reportError(err)
+	})
+	c.adapter.SetCloseHandler(func() {
+		c.Close()
+	})
+
+	// 启动读取循环
+	c.adapter.ReadPump()
 }

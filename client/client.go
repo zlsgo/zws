@@ -9,24 +9,26 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/sohaha/zws"
+	"github.com/zlsgo/zws"
 	"nhooyr.io/websocket"
 )
 
 // Client WebSocket 客户端
 type Client struct {
-	id       string
-	url      string
-	header   http.Header
-	config   *zws.ClientConfig
-	conn     *websocket.Conn
-	hub      *clientHub
-	once     sync.Once
-	closed   atomic.Bool
-	ctx      context.Context
-	cancel   context.CancelFunc
-	handlers *Handlers
-	mu       sync.RWMutex
+	id         string
+	url        string
+	header     http.Header
+	config     *zws.ClientConfig
+	conn       *websocket.Conn
+	hub        *clientHub
+	once       sync.Once
+	closed     atomic.Bool
+	ctx        context.Context
+	cancel     context.CancelFunc
+	connCtx    context.Context    // 连接级别的上下文
+	connCancel context.CancelFunc // 取消连接级别的上下文
+	handlers   *Handlers
+	mu         sync.RWMutex
 }
 
 // Handlers 客户端事件回调
@@ -39,6 +41,8 @@ type Handlers struct {
 	OnDisconnect func(*Client)
 	// OnError 发生错误时回调
 	OnError func(*Client, error)
+	// OnConnectionLoss 连接丢失时回调（可恢复的断线）
+	OnConnectionLoss func(*Client, error)
 }
 
 // NewClient 创建新的客户端
@@ -89,20 +93,32 @@ func (c *Client) Connect() error {
 		return fmt.Errorf("dial failed: %w", err)
 	}
 
+	// 清理旧连接资源
 	c.mu.Lock()
-	c.conn = conn
-	c.mu.Unlock()
-
-	// 启动心跳
-	if c.config.PingInterval > 0 {
-		go c.startPing()
+	if c.connCancel != nil {
+		c.connCancel()
 	}
+	if c.conn != nil {
+		c.conn.Close(websocket.StatusGoingAway, "reconnecting")
+	}
+
+	// 创建新的连接级别上下文
+	connCtx, connCancel := context.WithCancel(c.ctx)
+	c.conn = conn
+	c.connCtx = connCtx
+	c.connCancel = connCancel
+	c.mu.Unlock()
 
 	// 启动读取循环
 	go c.readPump()
 
 	// 启动写入循环
 	go c.writePump()
+
+	// 启动心跳
+	if c.config.PingInterval > 0 {
+		go c.startPing()
+	}
 
 	c.mu.RLock()
 	onConnect := c.handlers.OnConnect
@@ -126,8 +142,14 @@ func (c *Client) Close() error {
 		c.hub.close()
 
 		c.mu.Lock()
+		// 清理连接级别的上下文
+		if c.connCancel != nil {
+			c.connCancel()
+			c.connCancel = nil
+		}
 		if c.conn != nil {
 			c.conn.Close(websocket.StatusNormalClosure, "")
+			c.conn = nil
 		}
 		c.mu.Unlock()
 
@@ -200,6 +222,13 @@ func (c *Client) OnError(fn func(*Client, error)) {
 	c.handlers.OnError = fn
 }
 
+// OnConnectionLoss 设置连接丢失回调
+func (c *Client) OnConnectionLoss(fn func(*Client, error)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.handlers.OnConnectionLoss = fn
+}
+
 func (c *Client) onMessage() func(*Client, []byte) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -218,18 +247,62 @@ func (c *Client) onError() func(*Client, error) {
 	return c.handlers.OnError
 }
 
+func (c *Client) onConnectionLoss() func(*Client, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.handlers.OnConnectionLoss
+}
+
 // readPump 读取循环
 func (c *Client) readPump() {
-	defer c.Close()
+	// 获取当前连接的上下文
+	c.mu.RLock()
+	connCtx := c.connCtx
+	c.mu.RUnlock()
+
+	if connCtx == nil {
+		return
+	}
 
 	for {
-		_, data, err := c.conn.Read(c.ctx)
+		select {
+		case <-connCtx.Done():
+			// 连接级别上下文被取消，退出读取循环
+			return
+		default:
+		}
+
+		_, data, err := c.conn.Read(connCtx)
 		if err != nil {
-			onError := c.onError()
-			if onError != nil {
-				onError(c, err)
+			// 检查是否是连接级别的上下文取消
+			if connCtx.Err() != nil {
+				return
 			}
-			break
+
+			// 检查是否是 Logical Session 被关闭
+			if c.closed.Load() {
+				return
+			}
+
+			// 这是 Connection Loss
+			onConnectionLoss := c.onConnectionLoss()
+			if onConnectionLoss != nil {
+				onConnectionLoss(c, err)
+			}
+
+			// 检查是否应该重连
+			if c.config.Reconnect && IsRecoverableError(err) {
+				policy := NewDefaultReconnectPolicy(c.config)
+				go c.reconnectLoop(c.ctx, policy, err)
+			} else {
+				// 不重连，触发 OnError 并关闭
+				onError := c.onError()
+				if onError != nil {
+					onError(c, err)
+				}
+				c.Close()
+			}
+			return
 		}
 
 		onMessage := c.onMessage()
@@ -241,6 +314,15 @@ func (c *Client) readPump() {
 
 // writePump 写入循环
 func (c *Client) writePump() {
+	// 获取当前连接的上下文
+	c.mu.RLock()
+	connCtx := c.connCtx
+	c.mu.RUnlock()
+
+	if connCtx == nil {
+		return
+	}
+
 	for {
 		select {
 		case data, ok := <-c.hub.outbox:
@@ -254,7 +336,11 @@ func (c *Client) writePump() {
 				}
 				return
 			}
+		case <-connCtx.Done():
+			// 连接级别上下文被取消，退出写入循环
+			return
 		case <-c.ctx.Done():
+			// Logical Session 被关闭
 			return
 		}
 	}
@@ -262,27 +348,40 @@ func (c *Client) writePump() {
 
 // write 写入数据
 func (c *Client) write(data []byte) error {
-	ctx, cancel := context.WithTimeout(c.ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(c.connCtx, 5*time.Second)
 	defer cancel()
 	return c.conn.Write(ctx, websocket.MessageText, data)
 }
 
 // startPing 启动心跳
 func (c *Client) startPing() {
+	// 获取当前连接的上下文
+	c.mu.RLock()
+	connCtx := c.connCtx
+	c.mu.RUnlock()
+
+	if connCtx == nil {
+		return
+	}
+
 	ticker := time.NewTicker(c.config.PingInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
-			ctx, cancel := context.WithTimeout(c.ctx, c.config.PingWait)
+			ctx, cancel := context.WithTimeout(connCtx, c.config.PingWait)
 			if err := c.conn.Ping(ctx); err != nil {
 				cancel()
 				c.Close()
 				return
 			}
 			cancel()
+		case <-connCtx.Done():
+			// 连接级别上下文被取消，退出心跳
+			return
 		case <-c.ctx.Done():
+			// Logical Session 被关闭
 			return
 		}
 	}
