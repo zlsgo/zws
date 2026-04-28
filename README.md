@@ -301,3 +301,75 @@ hub := zws.NewHub(&zws.ServerConfig{
 	AllowedOrigins: []string{"*"},
 })
 ```
+
+## 底层 API
+
+`zws` 重新导出了 `nhooyr.io/websocket` 的核心类型和常量，你不需要直接引入底层包即可使用完整的 WebSocket 协议功能。
+
+### 消息类型
+
+```go
+type MessageType int
+
+const (
+	MessageText   MessageType = iota + 1 // 文本消息
+	MessageBinary                          // 二进制消息
+)
+```
+
+### 状态码
+
+```go
+type StatusCode int
+
+// 常用状态码
+const (
+	StatusNormalClosure           StatusCode = 1000 // 正常关闭
+	StatusGoingAway               StatusCode = 1001 // 端点离开
+	StatusProtocolError           StatusCode = 1002 // 协议错误
+	StatusUnsupportedData         StatusCode = 1003 // 不支持的数据类型
+	StatusInvalidFramePayloadData StatusCode = 1007 // 无效帧数据
+	StatusPolicyViolation         StatusCode = 1008 // 策略违规
+	StatusMessageTooBig           StatusCode = 1009 // 消息过大
+	StatusInternalError           StatusCode = 1011 // 内部错误
+)
+```
+
+### 辅助函数
+
+```go
+// 从错误中提取关闭状态码
+func CloseStatus(err error) StatusCode
+```
+
+### Conn 底层方法
+
+```go
+conn.RawConn() *websocket.Conn                    // 获取底层连接
+conn.ReadMessage() (MessageType, []byte, error)   // 直接读取消息
+conn.WriteMessage(typ MessageType, data []byte)   // 直接写入消息
+conn.Ping() error                                  // 发送 Ping
+conn.CloseWithStatus(code StatusCode, reason)     // 带状态码关闭
+```
+
+### 使用示例
+
+```go
+hub.OnMessage(func(conn *zws.Conn, data []byte) {
+	// 发送二进制消息
+	err := conn.WriteMessage(zws.MessageBinary, []byte("binary data"))
+	if err != nil {
+		// 使用状态码关闭连接
+		_ = conn.CloseWithStatus(zws.StatusInvalidFramePayloadData, "invalid data")
+	}
+})
+
+hub.OnError(func(conn *zws.Conn, err error) {
+	// 提取关闭状态码
+	if statusCode := zws.CloseStatus(err); statusCode != -1 {
+		log.Printf("连接关闭，状态码: %d", statusCode)
+	}
+})
+```
+
+完整示例见 [example/lowlevel](./example/lowlevel)。

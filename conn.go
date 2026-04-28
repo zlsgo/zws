@@ -74,7 +74,7 @@ func (c *Conn) Get(key string) (any, bool) {
 	return v, ok
 }
 
-// Send 发送原始字节数据
+// Send 发送原始字节数据（作为 Text frame）
 func (c *Conn) Send(data []byte) (err error) {
 	defer func() {
 		if recover() != nil {
@@ -100,6 +100,22 @@ func (c *Conn) Send(data []byte) (err error) {
 	case <-c.ctx.Done():
 		return ErrConnClosed
 	}
+}
+
+// SendBinary 发送二进制数据（作为 Binary frame）
+// 适用于发送音频、视频、图片等二进制内容
+// 此方法绕过写入循环，直接写入底层连接
+func (c *Conn) SendBinary(data []byte) error {
+	if c.closed.Load() {
+		return ErrConnClosed
+	}
+	if c.ws == nil {
+		return fmt.Errorf("websocket connection is nil")
+	}
+
+	ctx, cancel := context.WithTimeout(c.ctx, DefaultWriteTimeout)
+	defer cancel()
+	return c.ws.Write(ctx, websocket.MessageBinary, data)
 }
 
 // JSON 发送 JSON 数据
@@ -134,6 +150,65 @@ func (c *Conn) Close() error {
 // IsClosed 检查连接是否已关闭
 func (c *Conn) IsClosed() bool {
 	return c.closed.Load()
+}
+
+// RawConn 返回底层的 WebSocket 连接
+// 使用此方法可以直接访问底层 WebSocket API，进行高级操作
+// 注意：直接操作底层连接可能会破坏 zws 的封装逻辑
+func (c *Conn) RawConn() *websocket.Conn {
+	return c.ws
+}
+
+// ReadMessage 直接读取一条 WebSocket 消息
+// 返回消息类型和数据，或错误
+// 此方法绕过默认的读取循环，适用于需要完全控制读取逻辑的场景
+func (c *Conn) ReadMessage() (MessageType, []byte, error) {
+	if c.ws == nil {
+		return 0, nil, fmt.Errorf("websocket connection is nil")
+	}
+	return c.ws.Read(c.ctx)
+}
+
+// WriteMessage 直接写入一条 WebSocket 消息
+// typ 是消息类型（MessageText 或 MessageBinary）
+// 此方法绕过默认的写入循环，适用于需要完全控制写入逻辑的场景
+func (c *Conn) WriteMessage(typ MessageType, data []byte) error {
+	if c.ws == nil {
+		return fmt.Errorf("websocket connection is nil")
+	}
+	ctx, cancel := context.WithTimeout(c.ctx, DefaultWriteTimeout)
+	defer cancel()
+	return c.ws.Write(ctx, typ, data)
+}
+
+// Ping 发送 WebSocket Ping 消息
+// 返回错误表示 Ping 失败或连接已关闭
+func (c *Conn) Ping() error {
+	if c.ws == nil {
+		return fmt.Errorf("websocket connection is nil")
+	}
+	return c.ws.Ping(c.ctx)
+}
+
+// CloseWithStatus 使用指定状态码和原因关闭连接
+// code 是关闭状态码，reason 是关闭原因（可选）
+func (c *Conn) CloseWithStatus(code StatusCode, reason string) error {
+	if c.closed.Load() {
+		return ErrConnClosed
+	}
+
+	c.once.Do(func() {
+		c.closed.Store(true)
+		c.cancel()
+		if c.hub != nil {
+			c.hub.Unregister(c)
+		}
+		if c.ws != nil {
+			c.ws.Close(code, reason)
+		}
+	})
+
+	return nil
 }
 
 func (c *Conn) reportError(err error) {
