@@ -28,14 +28,10 @@ func main() {
 	hub.OnMessage(func(conn *zws.Conn, data []byte) {
 		log.Printf("收到消息: %s", string(data))
 
-		// 使用底层 API 直接读取消息类型
-		// 这绕过了默认的读取循环
-		if conn.RawConn() != nil {
-			// 发送二进制消息示例
-			err := conn.WriteMessage(zws.MessageBinary, []byte("binary response"))
-			if err != nil {
-				log.Printf("发送二进制消息失败: %v", err)
-			}
+		// 发送二进制数据（音频、视频等）
+		err := conn.SendBinary([]byte("binary response"))
+		if err != nil {
+			log.Printf("发送二进制消息失败: %v", err)
 		}
 
 		// 发送文本消息

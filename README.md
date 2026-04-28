@@ -350,14 +350,15 @@ conn.ReadMessage() (MessageType, []byte, error)   // 直接读取消息
 conn.WriteMessage(typ MessageType, data []byte)   // 直接写入消息
 conn.Ping() error                                  // 发送 Ping
 conn.CloseWithStatus(code StatusCode, reason)     // 带状态码关闭
+conn.SendBinary(data []byte) error                // 发送二进制数据（Binary frame）
 ```
 
 ### 使用示例
 
 ```go
 hub.OnMessage(func(conn *zws.Conn, data []byte) {
-	// 发送二进制消息
-	err := conn.WriteMessage(zws.MessageBinary, []byte("binary data"))
+	// 发送二进制消息（音频、视频等）
+	err := conn.SendBinary([]byte("binary data"))
 	if err != nil {
 		// 使用状态码关闭连接
 		_ = conn.CloseWithStatus(zws.StatusInvalidFramePayloadData, "invalid data")
@@ -370,6 +371,21 @@ hub.OnError(func(conn *zws.Conn, err error) {
 		log.Printf("连接关闭，状态码: %d", statusCode)
 	}
 })
+```
+
+### 发送二进制数据
+
+`conn.Send()` 默认发送 Text frame（UTF-8 文本），发送二进制数据（如音频流）应使用 `conn.SendBinary()`：
+
+```go
+// ❌ 错误：二进制数据作为 Text frame 发送会导致浏览器报错
+conn.Send(mp3Data)
+
+// ✅ 正确：使用 Binary frame 发送
+conn.SendBinary(mp3Data)
+
+// 或使用底层方法
+conn.WriteMessage(zws.MessageBinary, mp3Data)
 ```
 
 完整示例见 [example/lowlevel](./example/lowlevel)。
